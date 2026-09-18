@@ -7,14 +7,24 @@ require('dotenv').config();
 
 const app = express();
 
-// CORS এবং অডিও ফাইল সাপোর্ট সাইজ লিমিট
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// ব্যাকএন্ড হেলথ চেক
+// ইউটিউব ও সিস্টেম প্রম্পট নির্দেশিকা
+const systemPrompt = `You are MYRA, a smart and friendly Bengali AI voice assistant.
+CRITICAL INSTRUCTION: If the user asks to play a song, play music, or open YouTube (e.g., "ইউটিউব ওপেন করে একটা হিন্দি গান প্লে করো", "গান চালাও"), you MUST include a tag like [OPEN_YOUTUBE: song or query name] in your reply.
+
+Example 1:
+User: ইউটিউব ওপেন করে একটা হিন্দি গান প্লে করো
+Assistant: [OPEN_YOUTUBE: hindi song] ঠিক আছে, আমি ইউটিউবে হিন্দি গান চালু করে দিচ্ছি।
+
+Example 2:
+User: অরিজিৎ সিং এর গান প্লে করো
+Assistant: [OPEN_YOUTUBE: Arijit Singh songs] অবশ্যই, অরিজিৎ সিং এর গান প্লে করছি।`;
+
 app.get('/', (req, res) => {
   res.send('MYRA AI Backend is Live and Running!');
 });
@@ -30,7 +40,7 @@ app.post('/chat', async (req, res) => {
 
     const chatCompletion = await groq.chat.completions.create({
       messages: [
-        { role: 'system', content: 'You are MYRA, a very friendly and helpful Bengali AI voice assistant.' },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage }
       ],
       model: 'openai/gpt-oss-20b'
@@ -60,7 +70,6 @@ app.post('/voice', async (req, res) => {
     const base64Data = audio.replace(/^data:audio\/\w+;base64,/, '');
     fs.writeFileSync(tempAudioPath, Buffer.from(base64Data, 'base64'));
 
-    // Groq Whisper API দিয়ে কথাকে টেক্সট করা
     const transcription = await groq.audio.transcriptions.create({
       file: fs.createReadStream(tempAudioPath),
       model: 'whisper-large-v3',
@@ -74,10 +83,9 @@ app.post('/voice', async (req, res) => {
       return res.json({ response: 'কথা স্পষ্ট শোনা যায়নি।' });
     }
 
-    // AI উত্তর জেনারেট করা
     const chatCompletion = await groq.chat.completions.create({
       messages: [
-        { role: 'system', content: 'You are MYRA, a friendly Bengali AI assistant.' },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userSpeech }
       ],
       model: 'openai/gpt-oss-20b'
@@ -96,4 +104,4 @@ app.post('/voice', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-                       });
+});
