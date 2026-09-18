@@ -1,45 +1,42 @@
 const express = require('express');
 const cors = require('cors');
-const { createClient } = require('@supabase/supabase-js');
 const Groq = require('groq-sdk');
-const gTTS = require('gtts');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
 
 const app = express();
 
-// CORS এবং অডিও ডেটা সাইজ লিমিট বৃদ্ধি
+// CORS এবং অডিও ফাইল সাপোর্ট সাইজ লিমিট
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const supabase = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_ANON_KEY || '');
 
-// সার্ভার রানিং চেক Route
+// ব্যাকএন্ড হেলথ চেক
 app.get('/', (req, res) => {
-  res.send('MYRA AI Backend is Running Online!');
+  res.send('MYRA AI Backend is Live and Running!');
 });
 
-// সরাসরি চ্যাট হ্যান্ডলার (GET/POST দুই মেথডেই কাজ করবে)
+// টেক্সট চ্যাট রাউট
 app.post('/chat', async (req, res) => {
   try {
     const userMessage = req.body.message || req.body.prompt;
     
     if (!userMessage) {
-      return res.status(400).json({ error: 'Message input is missing' });
+      return res.status(400).json({ error: 'Message input is required' });
     }
 
     const chatCompletion = await groq.chat.completions.create({
       messages: [
-        { role: 'system', content: 'You are MYRA, a very friendly and helpful Bengali AI voice assistant. Speak in plain Bengali text.' },
+        { role: 'system', content: 'You are MYRA, a very friendly and helpful Bengali AI voice assistant.' },
         { role: 'user', content: userMessage }
       ],
       model: 'openai/gpt-oss-20b'
     });
 
-    const aiReply = chatCompletion.choices[0]?.message?.content || 'দুঃখিত, কোনো উত্তর দেওয়া সম্ভব হয়নি।';
+    const aiReply = chatCompletion.choices[0]?.message?.content || 'কোনো উত্তর পাওয়া যায়নি।';
     
     return res.json({ 
       response: aiReply,
@@ -48,22 +45,22 @@ app.post('/chat', async (req, res) => {
 
   } catch (error) {
     console.error('Groq Chat Error:', error);
-    return res.status(500).json({ error: 'Server Internal Error: ' + error.message });
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// ভয়েস ফাইল প্রসেস হ্যান্ডলার
+// ভয়েস প্রসেস রাউট
 app.post('/voice', async (req, res) => {
   const tempAudioPath = path.join(__dirname, `audio_${Date.now()}.wav`);
   
   try {
     const { audio } = req.body;
-    if (!audio) return res.status(400).json({ error: 'No audio stream provided' });
+    if (!audio) return res.status(400).json({ error: 'No audio data provided' });
 
     const base64Data = audio.replace(/^data:audio\/\w+;base64,/, '');
     fs.writeFileSync(tempAudioPath, Buffer.from(base64Data, 'base64'));
 
-    // Whisper দিয়ে ভয়েস থেকে টেক্সট রূপান্তর
+    // Groq Whisper API দিয়ে কথাকে টেক্সট করা
     const transcription = await groq.audio.transcriptions.create({
       file: fs.createReadStream(tempAudioPath),
       model: 'whisper-large-v3',
@@ -86,17 +83,17 @@ app.post('/voice', async (req, res) => {
       model: 'openai/gpt-oss-20b'
     });
 
-    const aiReply = chatCompletion.choices[0]?.message?.content || 'দুঃখিত, পুনরায় বলুন।';
+    const aiReply = chatCompletion.choices[0]?.message?.content || 'দুঃখিত, কোনো উত্তর দেওয়া সম্ভব হয়নি।';
     return res.json({ transcript: userSpeech, response: aiReply });
 
   } catch (err) {
     if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
-    console.error('Voice Processing Error:', err);
+    console.error('Voice Error:', err);
     return res.status(500).json({ error: err.message });
   }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+  console.log(`Server running on port ${PORT}`);
+                       });
