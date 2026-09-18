@@ -1,15 +1,16 @@
-const express = require('express');
+const Express = require('express');
 const cors = require('cors');
 const Groq = require('groq-sdk');
 const fs = require('fs');
 const path = require('path');
+const YouTube = require('youtube-sr').default; // প্রথম ভিডিও আইডি বের করার জন্য
 require('dotenv').config();
 
-const app = express();
+const app = Express();
 
 app.use(cors({ origin: '*' }));
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(Express.json({ limit: '50mb' }));
+app.use(Express.urlencoded({ limit: '50mb', extended: true }));
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -24,6 +25,27 @@ Assistant: [OPEN_YOUTUBE: hindi song] ঠিক আছে, আমি ইউট�
 Example 2:
 User: অরিজিৎ সিং এর গান প্লে করো
 Assistant: [OPEN_YOUTUBE: Arijit Singh songs] অবশ্যই, অরিজিৎ সিং এর গান প্লে করছি।`;
+
+// ইউটিউবে গান সার্চ করে প্রথম ভিডিওর আইডি বের করার ফাংশন
+async function processYoutubeTag(aiText) {
+  if (!aiText || !aiText.includes('[OPEN_YOUTUBE:')) return aiText;
+
+  const match = aiText.match(/\[OPEN_YOUTUBE:\s*(.*?)\]/);
+  if (match && match[1]) {
+    const songName = match[1].trim();
+    try {
+      // ইউটিউবে সার্চ করে সরাসরি প্রথম ভিডিও নিয়ে আসা
+      const video = await YouTube.searchOne(songName);
+      if (video && video.id) {
+        // [OPEN_YOUTUBE: ...] ট্যাগ সরিয়ে [PLAY_VIDEO: videoId] দিয়ে রিপ্লেস করা
+        return aiText.replace(/\[OPEN_YOUTUBE:.*?\]/g, `[PLAY_VIDEO: ${video.id}]`);
+      }
+    } catch (err) {
+      console.error('YouTube Search Error:', err);
+    }
+  }
+  return aiText;
+}
 
 app.get('/', (req, res) => {
   res.send('MYRA AI Backend is Live and Running!');
@@ -46,8 +68,11 @@ app.post('/chat', async (req, res) => {
       model: 'openai/gpt-oss-20b'
     });
 
-    const aiReply = chatCompletion.choices[0]?.message?.content || 'কোনো উত্তর পাওয়া যায়নি।';
+    let aiReply = chatCompletion.choices[0]?.message?.content || 'কোনো উত্তর পাওয়া যায়নি।';
     
+    // ভিডিও আইডি চেক ও রিপ্লেস লজিক
+    aiReply = await processYoutubeTag(aiReply);
+
     return res.json({ 
       response: aiReply,
       reply: aiReply 
@@ -91,7 +116,11 @@ app.post('/voice', async (req, res) => {
       model: 'openai/gpt-oss-20b'
     });
 
-    const aiReply = chatCompletion.choices[0]?.message?.content || 'দুঃখিত, কোনো উত্তর দেওয়া সম্ভব হয়নি।';
+    let aiReply = chatCompletion.choices[0]?.message?.content || 'দুঃখিত, কোনো উত্তর দেওয়া সম্ভব হয়নি।';
+    
+    // ভিডিও আইডি চেক ও রিপ্লেস লজিক
+    aiReply = await processYoutubeTag(aiReply);
+
     return res.json({ transcript: userSpeech, response: aiReply });
 
   } catch (err) {
@@ -104,4 +133,4 @@ app.post('/voice', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-});
+          });
