@@ -8,99 +8,95 @@ const path = require('path');
 require('dotenv').config();
 
 const app = express();
-const expressWs = require('express-ws')(app);
 
+// CORS এবং অডিও ডেটা সাইজ লিমিট বৃদ্ধি
 app.use(cors({ origin: '*' }));
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const supabase = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_ANON_KEY || '');
 
+// সার্ভার রানিং চেক Route
 app.get('/', (req, res) => {
-  res.send('MYRA AI Backend is Running');
+  res.send('MYRA AI Backend is Running Online!');
 });
 
-// --- WEBSOCKET VOICE ROUTE ---
-app.ws('/ws-voice', (ws, req) => {
-  console.log('WebSocket Connected');
-
-  ws.on('message', async (msg) => {
-    // ইউনিক ফাইল নেম তৈরি (যাতে একের অধিক রিকোয়েস্ট ওভারল্যাপ না করে)
-    const timestamp = Date.now();
-    const tempAudioPath = path.join(__dirname, `input_${timestamp}.webm`);
-    const tempMp3Path = path.join(__dirname, `output_${timestamp}.mp3`);
-
-    try {
-      // বাইনারি অডিও ফাইল সেভ করা
-      fs.writeFileSync(tempAudioPath, msg);
-
-      // ১. Groq Whisper API দিয়ে অডিও থেকে বাংলা টেক্সট করা
-      const transcription = await groq.audio.transcriptions.create({
-        file: fs.createReadStream(tempAudioPath),
-        model: 'whisper-large-v3',
-        language: 'bn',
-      });
-
-      const userText = transcription.text;
-
-      // ইনপুট ফাইল মুছে ফেলা
-      if (fs.existsSync(tempAudioPath)) {
-        fs.unlinkSync(tempAudioPath);
-      }
-
-      if (!userText || !userText.trim()) return;
-
-      // ২. Groq-এর সক্রিয় মডেল ব্যবহার করে উত্তর নেওয়া (স্ক্রিনশটের সঠিক মডেল)
-      const chatCompletion = await groq.chat.completions.create({
-        messages: [
-          { role: 'system', content: 'You are MYRA, a helpful, natural Bengali AI assistant. Answer concisely.' },
-          { role: 'user', content: userText }
-        ],
-        model: 'openai/gpt-oss-20b', // আপনার টার্মিনাল টেস্ট অনুযায়ী ওয়ার্কিং মডেল
-      });
-
-      const aiReply = chatCompletion.choices[0]?.message?.content || 'আমি দুঃখিত, বুঝতে পারিনি।';
-
-      // ৩. gTTS দিয়ে উত্তরকে ভয়েসে রূপান্তর করা
-      const gtts = new gTTS(aiReply, 'bn');
-
-      gtts.save(tempMp3Path, (err) => {
-        if (err) {
-          console.error('TTS Error:', err);
-          return;
-        }
-
-        if (fs.existsSync(tempMp3Path)) {
-          const audioBuffer = fs.readFileSync(tempMp3Path);
-          const audioBase64 = audioBuffer.toString('base64');
-          
-          // আউটপুট ফাইল মুছে ফেলা
-          fs.unlinkSync(tempMp3Path);
-
-          // ৪. ফ্রন্টএন্ডে ফলাফল পাঠানো
-          if (ws.readyState === 1) { // 1 = OPEN
-            ws.send(JSON.stringify({
-              user_text: userText,
-              ai_reply: aiReply,
-              audio_base64: audioBase64
-            }));
-          }
-        }
-      });
-
-    } catch (err) {
-      console.error('Voice Processing Error:', err);
-      
-      // ফাইল ক্যাচ ব্লকেও নিরাপদভাবে ক্লিনআপ করা
-      if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
-      if (fs.existsSync(tempMp3Path)) fs.unlinkSync(tempMp3Path);
+// সরাসরি চ্যাট হ্যান্ডলার (GET/POST দুই মেথডেই কাজ করবে)
+app.post('/chat', async (req, res) => {
+  try {
+    const userMessage = req.body.message || req.body.prompt;
+    
+    if (!userMessage) {
+      return res.status(400).json({ error: 'Message input is missing' });
     }
-  });
 
-  ws.on('close', () => {
-    console.log('WebSocket Connection Closed');
-  });
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [
+        { role: 'system', content: 'You are MYRA, a very friendly and helpful Bengali AI voice assistant. Speak in plain Bengali text.' },
+        { role: 'user', content: userMessage }
+      ],
+      model: 'openai/gpt-oss-20b'
+    });
+
+    const aiReply = chatCompletion.choices[0]?.message?.content || 'দুঃখিত, কোনো উত্তর দেওয়া সম্ভব হয়নি।';
+    
+    return res.json({ 
+      response: aiReply,
+      reply: aiReply 
+    });
+
+  } catch (error) {
+    console.error('Groq Chat Error:', error);
+    return res.status(500).json({ error: 'Server Internal Error: ' + error.message });
+  }
+});
+
+// ভয়েস ফাইল প্রসেস হ্যান্ডলার
+app.post('/voice', async (req, res) => {
+  const tempAudioPath = path.join(__dirname, `audio_${Date.now()}.wav`);
+  
+  try {
+    const { audio } = req.body;
+    if (!audio) return res.status(400).json({ error: 'No audio stream provided' });
+
+    const base64Data = audio.replace(/^data:audio\/\w+;base64,/, '');
+    fs.writeFileSync(tempAudioPath, Buffer.from(base64Data, 'base64'));
+
+    // Whisper দিয়ে ভয়েস থেকে টেক্সট রূপান্তর
+    const transcription = await groq.audio.transcriptions.create({
+      file: fs.createReadStream(tempAudioPath),
+      model: 'whisper-large-v3',
+      language: 'bn'
+    });
+
+    if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
+
+    const userSpeech = transcription.text;
+    if (!userSpeech || !userSpeech.trim()) {
+      return res.json({ response: 'কথা স্পষ্ট শোনা যায়নি।' });
+    }
+
+    // AI উত্তর জেনারেট করা
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [
+        { role: 'system', content: 'You are MYRA, a friendly Bengali AI assistant.' },
+        { role: 'user', content: userSpeech }
+      ],
+      model: 'openai/gpt-oss-20b'
+    });
+
+    const aiReply = chatCompletion.choices[0]?.message?.content || 'দুঃখিত, পুনরায় বলুন।';
+    return res.json({ transcript: userSpeech, response: aiReply });
+
+  } catch (err) {
+    if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
+    console.error('Voice Processing Error:', err);
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
